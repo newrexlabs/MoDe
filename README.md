@@ -1,68 +1,149 @@
-# MoDe
+# MoDe: Mixture of Deciders
 
-MoDe (Mixture of Deciders) is a family of small mixture-of-experts models that answer decision questions. You give it a
-state (any JSON) and a set of typed questions; it returns a probability for every option of every question, in one forward
-pass, with no text generation.
+**MoDe** is a family of small mixture-of-experts decision models. Give a model a state (text or any JSON) and the questions
+you need answered: pick one of several options, say yes or no, or rate on a scale. It answers all of them in one forward
+pass and returns a probability for every option, without generating text. It is called from software, not chatted with.
 
-| Model | Base | Weights |
-|---|---|---|
-| [MoDe-S](https://huggingface.co/newrexlabs/MoDe-S) | MobileMoE-S | 2.4 GB |
-| [MoDe-M](https://huggingface.co/newrexlabs/MoDe-M) | MobileMoE-M | 5.3 GB |
-| [MoDe-L](https://huggingface.co/newrexlabs/MoDe-L) | MobileMoE-L | 10 GB |
+This repository is the inference package: load a model, ask questions, batch, serve with CUDA graphs, and evaluate on the
+Decision Index.
+
+| Model | Parameters (active) | Decision Index 0.3, public suite | Median latency | Use it for |
+| --- | ---: | ---: | ---: | --- |
+| [MoDe-S](https://huggingface.co/newrexlabs/MoDe-S) | 1.27B (0.28B) | 42.02 | 12.1 ms | the smallest and fastest |
+| [MoDe-M](https://huggingface.co/newrexlabs/MoDe-M) | 2.82B (0.53B) | 47.10 | 19.3 ms | the balance of speed and quality |
+| [MoDe-L](https://huggingface.co/newrexlabs/MoDe-L) | 5.33B (0.93B) | 51.36 | 27.5 ms | the most accurate |
+
+## Highlights
+
+- **Few active parameters:** 60 experts, 4 routed per token, so MoDe-L runs under 1B parameters per token.
+- **Decision Index 0.3:** MoDe-M scores 47.10 on the full public suite, +4.9 over d3-nano (2.21B dense); MoDe-S is within
+  0.2 of it with 0.28B parameters active.
+- **Fast:** 12-28 ms median per request, one at a time, on the leaderboard's latency GPU (RTX PRO 6000 Blackwell).
+- **Many questions, one pass:** every question about a request is answered from the same forward pass. Long requests are
+  split by question automatically; input is never cut.
+- **Calibrated:** per-type temperatures, fitted on held-out data, are applied to every answer.
 
 ## Install
 
 ```bash
 pip install "MoDe @ git+https://github.com/newrexlabs/MoDe"
+huggingface-cli login   # the weights are gated: accept the licence on the model page first
 ```
 
-The weights are gated: accept the licence on the model page, then `huggingface-cli login`.
+Python 3.10+, PyTorch 2.8+, Transformers 4.57.6.
 
-## Use
+## Quickstart
 
 ```python
 from mode_decider import MoDe
 
 model = MoDe.from_pretrained("newrexlabs/MoDe-M")
 
-state = {"ticket": "My card was charged twice for the same order.", "customer_tier": "gold"}
-questions = {
-    "refund": {"type": "noul", "instructions": "Should we refund the duplicate charge?"},
-    "team": {"type": "choice", "instructions": "Which team handles this?",
-             "criteria": {"billing": "payments and refunds", "shipping": None, "tech": "app and login problems"}},
-    "urgency": {"type": "score", "instructions": "How urgent is it?", "criteria": ["low", "medium", "high"]},
-}
-
-model.decide(state, questions)
-# {"refund": {"true": ..., "false": ...}, "team": {"billing": ..., "shipping": ..., "tech": ...},
-#  "urgency": {"0": ..., "1": ..., "2": ...}}
+decision = model.decide(
+    state={
+        "ticket": "I was charged twice for order #4417. I need the duplicate refunded before my rent is due on Friday.",
+        "customer": {"plan": "premium", "orders_last_year": 23},
+    },
+    questions={
+        "team": {
+            "type": "choice",
+            "instructions": "Which team should handle this ticket?",
+            "criteria": {
+                "billing": "Payments, refunds and invoices",
+                "shipping": "Deliveries and returns",
+                "tech": "App, login and account problems",
+            },
+        },
+        "refund": {"type": "noul", "instructions": "Is the customer asking for a refund?"},
+        "urgency": {"type": "score", "instructions": "How urgent is this ticket?", "criteria": ["Routine", "Soon", "Today"]},
+    },
+)
 ```
 
-Question types:
+MoDe-M returns, in 16.1 ms on one RTX PRO 6000 Blackwell:
 
-- `noul`: yes/no. Options `true` and `false`.
-- `choice`: pick one. `criteria` maps each option id to a description (or `null`).
-- `score`: an ordered scale. `criteria` is a list; option ids are the positions `"0"`, `"1"`, ...
+```json
+{"team":    {"billing": 0.999, "shipping": 0.001, "tech": 0.0},
+ "refund":  {"true": 0.997, "false": 0.003},
+ "urgency": {"0": 0.02, "1": 0.765, "2": 0.215}}
+```
 
-`model.decide_batch([{"state": ..., "questions": ...}, ...])` answers many requests at once.
+## Request format
 
-The context is 8,192 tokens. A request that is too long is answered in smaller groups of questions, each with the full
-state; a single question that does not fit raises `Unsupported`. Input is never truncated.
+A request is a `state` (any JSON) and `questions`, a mapping of question id to question. Each question has a `type`, optional
+`instructions`, and `criteria`:
 
-On a GPU, CUDA graphs are captured when the model loads (pass `cuda_graphs=False` to skip). It also runs on CPU.
+| Type | Answers | `criteria` | Option ids |
+| --- | --- | --- | --- |
+| `noul` | yes / no | optional descriptions of `true` and `false` | `true`, `false` |
+| `choice` | one of several options | option id → description (or `null`) | the keys, in order |
+| `score` | a point on an ordered scale | a list, lowest first | `"0"`, `"1"`, ... |
 
-## Decision Index
+The result is `{question_id: {option_id: probability}}`, and each question's probabilities sum to 1.
 
-MoDe ships an engine for the [Decision Index](https://github.com/apolinario/decision-index) kit:
+- `model.decide_batch([{"state": ..., "questions": ...}, ...], batch_size=32)` answers many requests, batching those of
+  similar length.
+- The context is 8,192 tokens. A request that is too long is answered in smaller groups of questions, each with the full
+  state; a single question that does not fit on its own raises `Unsupported`. Input is never truncated.
+- On a GPU, CUDA graphs are captured when the model loads (`cuda_graphs=False` skips this). The model also runs on CPU.
+
+## Evaluation
+
+Decision Index 0.3, full public suite (140,178 scored requests):
+
+| Model | Parameters | Active per token | Public suite ↑ |
+| --- | ---: | ---: | ---: |
+| d3-edge | 0.59B | 0.59B | 28.82 |
+| d3-lite | 0.85B | 0.85B | 36.93 |
+| **MoDe-S** | 1.27B | 0.28B | **42.02** |
+| d3-nano | 2.21B | 2.21B | 42.22 |
+| **MoDe-M** | 2.82B | 0.53B | **47.10** |
+| **MoDe-L** | 5.33B | 0.93B | **51.36** |
+| d3-mini | 4.54B | 4.54B | 54.90 |
+
+By area:
+
+| Model | Knowledge | Language | Retrieval | Tools | Arts |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| MoDe-S | 18.4 | 40.9 | 54.5 | 61.6 | 45.1 |
+| MoDe-M | 20.6 | 46.6 | 62.5 | 68.4 | 47.0 |
+| MoDe-L | 24.8 | 51.3 | 65.3 | 75.2 | 48.8 |
+
+<sub>MoDe: run by us with the official 0.3 kit and this package's engine on the released weights, on an RTX PRO 6000
+Blackwell; 4 requests whose single question is longer than 8,192 tokens are reported as unsupported and scored as wrong. Not
+yet verified by the leaderboard maintainers. Other models: public-suite scores from their own model cards, all with the
+official 0.3 kit; their parameter counts include a vision encoder. Latency: one request at a time over a 1,500-request sample
+of the suite, on a MIG half of an RTX PRO 6000 Blackwell, CUDA graphs on.</sub>
+
+To run the suite yourself with the [Decision Index](https://github.com/apolinario/decision-index) kit:
 
 ```bash
 pip install "MoDe[eval] @ git+https://github.com/newrexlabs/MoDe"
 python -m decision_index pipeline --engine mode_decider.di_engine:MoDeEngine --option model=newrexlabs/MoDe-M --out runs/mode-m
 ```
 
-## Licence
+## Limitations
 
-The code in this repository is Apache-2.0. The model weights are derived from Meta's MobileMoE and are released under the
-FAIR Noncommercial Research License (noncommercial research use only); see each model page.
+- **Text only**, up to 8,192 tokens per request.
+- **One pass:** knowledge stays near the base model's level (the weakest area above), and multi-step reasoning is not solved
+  by reading harder.
+- **Tested in English.**
+
+## License
+
+The code in this repository is Apache-2.0 ([LICENSE](LICENSE)). The model weights are derived from Meta's MobileMoE and are
+released under the FAIR Noncommercial Research License: noncommercial research use only, subject to the FAIR Acceptable Use
+Policy; see each model page. Please acknowledge MobileMoE in any publication that uses MoDe.
+
+## Citation
+
+```bibtex
+@misc{mode_2026,
+  title        = {{MoDe}: Mixture of Deciders},
+  author       = {{newrexlabs}},
+  year         = {2026},
+  howpublished = {\url{https://github.com/newrexlabs/MoDe}}
+}
+```
 
 MoDe was built with help from Claude Opus 5.5 (Anthropic).
