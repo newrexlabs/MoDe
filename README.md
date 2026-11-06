@@ -9,7 +9,7 @@ pass and returns a probability for every option, without generating text. It is 
 This repository is the inference package: load a model, ask questions, batch, serve with CUDA graphs, and evaluate on the
 Decision Index.
 
-| Model | Parameters (active) | Decision Index 0.3, public suite | Median latency | Use it for |
+| Model | Parameters (active) | Decision Index | Median latency | Use it for |
 | --- | ---: | ---: | ---: | --- |
 | [MoDe-S](https://huggingface.co/newrexlabs/MoDe-S) | 1.27B (0.28B) | 42.02 | 12.1 ms | the smallest and fastest |
 | [MoDe-M](https://huggingface.co/newrexlabs/MoDe-M) | 2.82B (0.53B) | 47.10 | 19.3 ms | the balance of speed and quality |
@@ -18,9 +18,10 @@ Decision Index.
 ## Highlights
 
 - **Few active parameters:** 60 experts, 4 routed per token, so MoDe-L runs under 1B parameters per token.
-- **Decision Index 0.3:** MoDe-M scores 47.10 on the full public suite, +4.9 over d3-nano (2.21B dense); MoDe-S is within
-  0.2 of it with 0.28B parameters active.
-- **Fast:** 12-28 ms median per request, one at a time, on the leaderboard's latency GPU (RTX PRO 6000 Blackwell).
+- **Decision Index:** MoDe-M scores 47.10, +4.9 over [d3-nano](https://huggingface.co/vllm-sr/d3-nano) (2.21B dense); MoDe-S is within 0.2 of it with 0.28B
+  parameters active. The [Decision Index](https://github.com/apolinario/decision-index) is an open benchmark of 37 decision
+  tasks in five areas; scores are on its full public test set.
+- **Fast:** 12-28 ms median per request, one request at a time, on an NVIDIA RTX PRO 6000 Blackwell GPU.
 - **Many questions, one pass:** every question about a request is answered from the same forward pass. Long requests are
   split by question automatically; input is never cut.
 - **Calibrated:** per-type temperatures, fitted on held-out data, are applied to every answer.
@@ -91,17 +92,18 @@ The result is `{question_id: {option_id: probability}}`, and each question's pro
 
 ## Evaluation
 
-Decision Index 0.3, full public suite (140,178 scored requests):
+Scores on the full public test set of the [Decision Index](https://github.com/apolinario/decision-index) (version 0.3,
+140,178 requests), an open benchmark of 37 decision tasks; 0 is random guessing and 100 is perfect.
 
-| Model | Parameters | Active per token | Public suite ↑ |
+| Model | Parameters | Active per token | Decision Index ↑ |
 | --- | ---: | ---: | ---: |
-| d3-edge | 0.59B | 0.59B | 28.82 |
-| d3-lite | 0.85B | 0.85B | 36.93 |
+| [d3-edge](https://huggingface.co/vllm-sr/d3-edge) | 0.59B | 0.59B | 28.82 |
+| [d3-lite](https://huggingface.co/vllm-sr/d3-lite) | 0.85B | 0.85B | 36.93 |
 | **MoDe-S** | 1.27B | 0.28B | **42.02** |
-| d3-nano | 2.21B | 2.21B | 42.22 |
+| [d3-nano](https://huggingface.co/vllm-sr/d3-nano) | 2.21B | 2.21B | 42.22 |
 | **MoDe-M** | 2.82B | 0.53B | **47.10** |
 | **MoDe-L** | 5.33B | 0.93B | **51.36** |
-| d3-mini | 4.54B | 4.54B | 54.90 |
+| [d3-mini](https://huggingface.co/vllm-sr/d3-mini) | 4.54B | 4.54B | 54.90 |
 
 By area:
 
@@ -111,13 +113,13 @@ By area:
 | MoDe-M | 20.6 | 46.6 | 62.5 | 68.4 | 47.0 |
 | MoDe-L | 24.8 | 51.3 | 65.3 | 75.2 | 48.8 |
 
-<sub>MoDe: run by us with the official 0.3 kit and this package's engine on the released weights, on an RTX PRO 6000
-Blackwell; 4 requests whose single question is longer than 8,192 tokens are reported as unsupported and scored as wrong. Not
-yet verified by the leaderboard maintainers. Other models: public-suite scores from their own model cards, all with the
-official 0.3 kit; their parameter counts include a vision encoder. Latency: one request at a time over a 1,500-request sample
-of the suite, on a MIG half of an RTX PRO 6000 Blackwell, CUDA graphs on.</sub>
+<sub>MoDe: all 140,178 requests of the public test set, run by us with the benchmark's own evaluation tool (version 0.3)
+and this package's engine on the released weights; 4 requests whose single question is longer than 8,192 tokens are refused
+and scored as wrong. Not yet verified by the benchmark's maintainers. Other models: scores from their own model cards, on the
+same test set with the same tool; their parameter counts include a vision encoder. Latency: one request at a time over 1,500
+requests from the test set, on half of an NVIDIA RTX PRO 6000 Blackwell GPU (split with MIG), CUDA graphs on.</sub>
 
-To run the suite yourself with the [Decision Index](https://github.com/apolinario/decision-index) kit:
+To run the benchmark yourself with its evaluation tool:
 
 ```bash
 pip install "MoDe[eval] @ git+https://github.com/newrexlabs/MoDe"
