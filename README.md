@@ -1,3 +1,5 @@
+![newrexlabs](docs/figures/newrexlabs-banner.png)
+
 # MoDe: Mixture of Deciders
 
 **MoDe** is a family of small mixture-of-experts decision models. Give a model a state (text or any JSON) and the questions
