@@ -50,10 +50,7 @@ class MoDe:
         if device.type == "cuda" and torch.cuda.get_device_capability(device)[0] >= 10:
             torch.backends.cuda.enable_cudnn_sdp(False)  # cuDNN attention gives wrong masked outputs on Blackwell
 
-        # The models were trained with the base tokenizer exactly as shipped; fix_mistral_regex=False keeps that and silences
-        # transformers' suggestion to change it. Length is checked by encode(), so the tokenizer's own limit is lifted.
-        tokenizer = AutoTokenizer.from_pretrained(path, fix_mistral_regex=False)
-        tokenizer.model_max_length = 10**9
+        tokenizer = AutoTokenizer.from_pretrained(path)
         if tokenizer.pad_token_id is None:
             tokenizer.pad_token = tokenizer.eos_token
         dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
