@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-eval = ["decision-index @ git+https://github.com/apolinario/decision-index"]
+eval = ["decision-index @ git+https://github.com/apolinario/decision-index@25c6ec7b6b5f44a216c63c3a700de3a9c6d6699d"]
 dev = ["pytest>=8.0", "ruff>=0.6"]
 
 [tool.hatch.build.targets.wheel]
