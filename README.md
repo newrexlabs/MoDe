@@ -2,11 +2,11 @@
 
 # MoDe: Mixture of Deciders
 
-**MoDe** is a family of small mixture-of-experts decision models. Give a model a state (text or any JSON) and the questions
+**MoDe** is a family of small mixture-of-experts decision models. Give a model an input (text or any JSON, called the state) and the questions
 you need answered: pick one of several options, say yes or no, or rate on a scale. It answers all of them in one forward
 pass and returns a probability for every option, without generating text. It is called from software, not chatted with.
 
-This repository is the inference package: load a model, ask questions, batch, serve with CUDA graphs, and evaluate on the
+This repository is the inference package: load a model, ask questions, batch many requests, run fast on a GPU, and evaluate on the
 Decision Index.
 
 | Model | Parameters (active) | Decision Index | Median latency | Use it for |
@@ -17,14 +17,16 @@ Decision Index.
 
 ## Highlights
 
-- **Few active parameters:** 60 experts, 4 routed per token, so MoDe-L runs under 1B parameters per token.
-- **Decision Index:** MoDe-M scores 47.10, +4.9 over [d3-nano](https://huggingface.co/vllm-sr/d3-nano) (2.21B dense); MoDe-S is within 0.2 of it with 0.28B
+- **Few active parameters:** each layer has 60 experts and uses 4 of them per token, so even MoDe-L uses under 1B
+  parameters per token.
+- **Decision Index:** MoDe-M scores 47.10, +4.9 over [d3-nano](https://huggingface.co/vllm-sr/d3-nano) (2.21B, all active); MoDe-S is within 0.2 of it with 0.28B
   parameters active. The [Decision Index](https://github.com/apolinario/decision-index) is an open benchmark of 37 decision
   tasks in five areas; scores are on its full public test set.
 - **Fast:** 12-28 ms median per request, one request at a time, on an NVIDIA RTX PRO 6000 Blackwell GPU.
 - **Many questions, one pass:** every question about a request is answered from the same forward pass. Long requests are
   split by question automatically; input is never cut.
-- **Calibrated:** per-type temperatures, fitted on held-out data, are applied to every answer.
+- **Calibrated:** probabilities are rescaled for each question type (temperature scaling, fitted on held-out data), so
+  they can be used as confidence scores.
 
 ## Install
 
@@ -88,7 +90,8 @@ The result is `{question_id: {option_id: probability}}`, and each question's pro
   similar length.
 - The context is 8,192 tokens. A request that is too long is answered in smaller groups of questions, each with the full
   state; a single question that does not fit on its own raises `Unsupported`. Input is never truncated.
-- On a GPU, CUDA graphs are captured when the model loads (`cuda_graphs=False` skips this). The model also runs on CPU.
+- On a GPU, the model is prepared with CUDA graphs when it loads, which makes each request faster (`cuda_graphs=False`
+  skips this). The model also runs on CPU.
 
 ## Evaluation
 
@@ -105,7 +108,7 @@ Scores on the full public test set of the [Decision Index](https://github.com/ap
 | **MoDe-L** | 5.33B | 0.93B | **51.36** |
 | [d3-mini](https://huggingface.co/vllm-sr/d3-mini) | 4.54B | 4.54B | 54.90 |
 
-By area:
+On the benchmark's five areas:
 
 | Model | Knowledge | Language | Retrieval | Tools | Arts |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -129,8 +132,8 @@ python -m decision_index pipeline --engine mode_decider.di_engine:MoDeEngine --o
 ## Limitations
 
 - **Text only**, up to 8,192 tokens per request.
-- **One pass:** knowledge stays near the base model's level (the weakest area above), and multi-step reasoning is not solved
-  by reading harder.
+- **No step-by-step reasoning:** every answer comes from one pass over the input, so questions that need several reasoning
+  steps, or facts the base model does not know, are the weakest (see the knowledge scores above).
 - **Tested in English.**
 
 ## License
