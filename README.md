@@ -83,7 +83,6 @@ forward pass, so there are no sampling parameters to set.
 
 ```bash
 pip install "MoDe @ git+https://github.com/newrexlabs/MoDe"
-huggingface-cli login   # the weights are gated: accept the licence on the model page first
 ```
 
 ```python
