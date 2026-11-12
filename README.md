@@ -117,6 +117,35 @@ urgency  0 Routine  ░░░░░░░░░░░░░░░░░░░░
          2 Today    █████░░░░░░░░░░░░░░░░░░░ 0.215
 ```
 
+**Requirements:** one NVIDIA GPU (the bf16 weights take 2.5 GB for S, 5.6 GB for M and 10.7 GB for L), `torch>=2.8` with
+its bundled Triton, and `transformers==4.57.6`. Measured with torch 2.11.0+cu128 / Triton 3.6.0 and with a clean install of
+this package (torch 2.15.0+cu132 / Triton 3.9.0); both give the speeds below. The fast path has three parts, all on by
+default on a GPU:
+
+- **CUDA graphs.** `from_pretrained` captures a graph at load for every (batch, length) bucket within 32,768 tokens (one
+  request up to 8,192 tokens, batches up to 64), so no request captures or compiles anything. Shapes outside the grid run eagerly. `cuda_graphs=False` skips the capture; a
+  request is then about 4 times slower (MoDe-S: 45 to 53 ms median instead of 11 ms on the same card).
+- **Grouped experts.** Each layer's 60 experts run as one grouped matrix multiplication: `torch._grouped_mm` on H100 and
+  B200 (sm_90, sm_100), the package's own Triton kernel on other GPUs, including the RTX PRO 6000.
+- **Attention.** PyTorch SDPA, with cuDNN attention switched off on Blackwell (it returns wrong outputs with padding masks).
+
+To check that a loaded model is on the fast path, `model.graphed is not None` must be true; the Decision Index engine reports
+the same as `cuda_graphs` in its runtime info. On CPU the model runs in float32, eagerly.
+
+<details>
+<summary><strong>Running the Decision Index</strong></summary>
+
+```bash
+pip install "MoDe[eval] @ git+https://github.com/newrexlabs/MoDe@di-0.3-run"
+python -m decision_index pipeline --engine mode_decider.di_engine:MoDeEngine \
+    --option model=newrexlabs/MoDe-M --option cuda_graphs=true --compact --out runs/mode-m
+```
+
+One process, one GPU. Graph capture happens while the engine loads, before the first request, so it is not part of any
+request's time. The `environment.json` of each run records `"cuda_graphs": true` when the fast path is on.
+
+</details>
+
 <details>
 <summary><strong>Many requests in one call</strong></summary>
 
